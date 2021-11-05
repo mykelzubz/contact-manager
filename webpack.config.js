@@ -29,7 +29,7 @@ const cssRules = [
 ];
 
 
-module.exports = ({ production }, { analyze, hmr, port, host }) => ({
+module.exports = ({ production } = {}, { extractCss, analyze, tests, hmr, port, host } = {}) => ({
   resolve: {
     extensions: ['.js'],
     modules: [srcDir, 'node_modules'],
