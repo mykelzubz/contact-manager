@@ -14,10 +14,11 @@ const when = (condition, config, negativeConfig) =>
   condition ? ensureArray(config) : ensureArray(negativeConfig);
 
 // primary config:
+const title = 'Covid-19 Test Booking'
 const outDir = path.resolve(__dirname, project.platform.output);
 const srcDir = path.resolve(__dirname, 'src');
 const nodeModulesDir = path.resolve(__dirname, 'node_modules');
-const baseUrl = '';
+const baseUrl = '/';
 
 const cssRules = [
   {
@@ -31,7 +32,7 @@ const cssRules = [
 
 module.exports = ({ production } = {}, { extractCss, analyze, tests, hmr, port, host } = {}) => ({
   resolve: {
-    extensions: ['.js'],
+    extensions: ['.ts','.js'],
     modules: [srcDir, 'node_modules'],
 
     alias: {
@@ -56,14 +57,15 @@ module.exports = ({ production } = {}, { extractCss, analyze, tests, hmr, port, 
   output: {
     path: outDir,
     publicPath: baseUrl,
-    filename: production ? '[name].[chunkhash].bundle.js' : '[name].[fullhash].bundle.js',
-    chunkFilename: production ? '[name].[chunkhash].chunk.js' : '[name].[fullhash].chunk.js'
+    filename: production ? '[name].[chunkhash].bundle.js' : '[name].[hashed].bundle.js',
+    sourceMapFilename: production ? '[name].[chunkhash].bundle.map' : '[name].[hashed].bundle.map',
+    chunkFilename: production ? '[name].[chunkhash].chunk.js' : '[name].[hashed].chunk.js'
   },
   optimization: {
     runtimeChunk: true,  // separates the runtime chunk, required for long term cacheability
     // moduleIds is the replacement for HashedModuleIdsPlugin and NamedModulesPlugin deprecated in https://github.com/webpack/webpack/releases/tag/v4.16.0
     // changes module id's to use hashes be based on the relative path of the module, required for long term cacheability
-    moduleIds: 'deterministic',
+    moduleIds: 'hashed',
     // Use splitChunks to breakdown the App/Aurelia bundle down into smaller chunks
     // https://webpack.js.org/plugins/split-chunks-plugin/
     splitChunks: {
@@ -188,6 +190,7 @@ module.exports = ({ production } = {}, { extractCss, analyze, tests, hmr, port, 
   },
   performance: { hints: false },
   devServer: {
+    contentBase: outDir,
     // serve index.html for all 404 (required for push-state)
     historyApiFallback: true,
     open: project.platform.open,
@@ -195,19 +198,22 @@ module.exports = ({ production } = {}, { extractCss, analyze, tests, hmr, port, 
     port: port || project.platform.port,
     host: host
   },
-  devtool: production ? undefined : 'cheap-module-source-map',
+  devtool: production ? 'nosources-source-map' : 'cheap-module-source-map',
   module: {
     rules: [
       // CSS required in JS/TS files should use the style-loader that auto-injects it into the website
       // only when the issuer is a .js/.ts file, so the loaders are not applied inside html templates
       {
         test: /\.css$/i,
-        issuer: { not: [ /\.html$/i ] },
-        use: [ { loader: MiniCssExtractPlugin.loader }, ...cssRules ]
+        issuer: [{ not: [{ test: /\.html$/i }] }],
+        use: extractCss ? [ { 
+          loader: MiniCssExtractPlugin.loader 
+        }, ...cssRules 
+        ] : ['style-loader', ...cssRules]
       },
       {
         test: /\.css$/i,
-        issuer: /\.html$/i,
+        issuer: [{ test: /\.html$/i }],
         // CSS required in templates cannot be extracted safely
         // because Aurelia would try to require it again in runtime
         use: cssRules
@@ -216,16 +222,25 @@ module.exports = ({ production } = {}, { extractCss, analyze, tests, hmr, port, 
       // <span>${ c < 5 ? c : 'many' }</span>
       { test: /\.html$/i, loader: 'html-loader', options: { minimize: false } },
       { test: /\.js$/i, loader: 'babel-loader', exclude: nodeModulesDir },
+      { test: /\.json$/i, use: 'json-loader', type: 'javascript/auto' },
       // embed small images and fonts as Data Urls and larger ones as files:
-      { test: /\.(png|svg|jpg|jpeg|gif)$/i, type: 'asset' },
-      { test: /\.(woff|woff2|ttf|eot|svg|otf)(\?v=[0-9]\.[0-9]\.[0-9])?$/i,  type: 'asset' },
+      { test: /\.(png|gif|jpg|cur)$/i, loader: 'url-loader', options: { limit: 8192 } },
+      { test: /\.woff2(\?v=[0-9]\.[0-9]\.[0-9])?$/i, loader: 'url-loader', options: { limit: 10000, mimetype: 'application/font-woff2' } },
+      { test: /\.woff(\?v=[0-9]\.[0-9]\.[0-9])?$/i, loader: 'url-loader', options: { limit: 10000, mimetype: 'application/font-woff' } },
+      // load these fonts normally, as files:
+      { test: /\.(ttf|eot|svg|otf)(\?v=[0-9]\.[0-9]\.[0-9])?$/i, loader: 'file-loader' },
       { test: /environment\.json$/i, use: [
         {loader: "app-settings-loader", options: {env: production ? 'production' : 'development' }},
-      ]}
+      ]},
+      ...when(tests, {
+        test: /\.[jt]s$/i, loader: 'istanbul-instrumenter-loader',
+        include: srcDir, exclude: [/\.(spec|test)\.[jt]s$/i],
+        enforce: 'post', options: { esModules: true },
+      })
     ]
   },
   plugins: [
-    new DuplicatePackageCheckerPlugin(),
+    ...when(!tests, new DuplicatePackageCheckerPlugin()),
     new AureliaPlugin(),
     new ModuleDependenciesPlugin({
       'aurelia-testing': ['./compile-spy', './view-spy']
@@ -238,15 +253,15 @@ module.exports = ({ production } = {}, { extractCss, analyze, tests, hmr, port, 
       }
     }),
     // ref: https://webpack.js.org/plugins/mini-css-extract-plugin/
-    new MiniCssExtractPlugin({ // updated to match the naming conventions for the js files
-      filename: production ? '[name].[contenthash].bundle.css' : '[name].[fullhash].bundle.css',
-      chunkFilename: production ? '[name].[contenthash].chunk.css' : '[name].[fullhash].chunk.css'
-    }),
-    new CopyWebpackPlugin({
+    ...when(extractCss, new MiniCssExtractPlugin({ // updated to match the naming conventions for the js files
+      filename: production ? '[name].[contenthash].bundle.css' : '[name].[hash].bundle.css',
+      chunkFilename: production ? '[name].[contenthash].chunk.css' : '[name].[hash].chunk.css'
+    })),
+    ...when(!tests, new CopyWebpackPlugin({
       patterns: [
         { from: 'static', to: outDir, globOptions: { ignore: ['.*'] } }
       ]
-    }), // ignore dot (hidden) files
+    })), // ignore dot (hidden) files
     ...when(analyze, new BundleAnalyzerPlugin()),
     /**
      * Note that the usage of following plugin cleans the webpack output directory before build.
